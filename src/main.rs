@@ -29,6 +29,13 @@ struct ClientArgs{
 
     #[arg(short,long, default_value = "127.0.0.1")]
     address: String,
+
+    #[arg(short,long, default_value = "5")]
+    interval_secs: u64,
+
+    #[cfg(target_os = "linux")]
+    #[arg(short,long)]
+    timeout_secs: Option<u64>,
 }
 
 #[tokio::main]
@@ -69,7 +76,8 @@ async fn do_server(args: ServerArgs)->Result<()>{
                         if n > 0 {
                             println!("received: {}", String::from_utf8_lossy(&msg [0..n]));
                         } else {
-                            sleep(Duration::from_millis(10)).await;
+                            println!("connection {addr} closed");
+                            break;
                         }
                     }
                     Err(ref e) if e.kind() == tokio::io::ErrorKind::WouldBlock => {
@@ -93,15 +101,15 @@ async fn do_client(args: ClientArgs)->Result<()>{
     let address = args.address;
     let port = args.port;
 
-    let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
+    let stream = TcpStream::connect(format!("{address}:{port}")).await?;
+    let sock_ref = socket2::SockRef::from(&stream);
+    let ka = socket2::TcpKeepalive::new();
+    sock_ref.set_tcp_keepalive(&ka)?;
 
-    socket.set_keepalive(true)?;
-
-    let address = format!("{address}:{port}").as_str().parse::<SocketAddr>()?;
-    let address = address.into();
-    socket.connect(&address)?;
-    socket.set_nonblocking(true)?;
-    let stream = TcpStream::from_std(socket.into())?;
+    #[cfg(target_os = "linux")]
+    if let Some(secs) = args.timeout_secs {
+        sock_ref.set_tcp_user_timeout(Some(Duration::from_secs(secs)))?;
+    }
 
     println!("connected to server");
 
@@ -125,6 +133,6 @@ async fn do_client(args: ClientArgs)->Result<()>{
             }
         }
         
-        sleep(Duration::from_secs(1)).await;
+        sleep(Duration::from_secs(args.interval_secs)).await;
     }
 }
